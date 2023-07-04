@@ -5,6 +5,7 @@ import numpy as np
 from GapLearner import GapLearner
 import traceback
 import logging
+import struct
 
 class DataPacket:
     def __init__(self, method, data):
@@ -82,6 +83,8 @@ class GapServer:
                     else:
                         result = 'Error: Invalid method'
                     if len(result):
+                        lenbytes = struct.pack('<i', len(result))
+                        result = lenbytes + result
                         conn.sendall(result)  # send result back over the connection
                         self.logger.debug('sent')
 
@@ -115,7 +118,7 @@ class GapServer:
             inference = data
         else: 
             inference = inference.tobytes()
-        return inference
+        return b'0x00' + inference
 
     def stats(self):
         # Return ML model statistics here as bytes and a status code

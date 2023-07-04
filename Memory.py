@@ -17,24 +17,25 @@ class Memory:
         self.current_time = 0
         self.memory = []
         self.memory_bins = []
-        self.get_observation = self.get_observation_preprune
+        self.get_memory = self.get_memory_preprune
 
     def __len__(self):
         return len(self.memory)
 
     def add_observation(self, observation, rank):
+        self.logger.debug(f'adding observation \nmemory length: {len(self.memory)} cur time: ({self.current_time}) ({rank})\nobs len ({len(observation.observation)})')
         self.memory.append((observation, self.current_time, rank))
-        #self.logger.debug(f'added observatoin {len(self.memory)}')
+        observation.age = self.current_time
 
-    def get_observation_preprune(self, distance):
+    def get_memory_preprune(self, distance):
         if len(self.memory) == 0:
-            return []
+            return None
         if not self.memory_bins or len(self.memory_bins) == 0:
             self.prune()
-            self.get_observation = self.get_observation_postprune
-            return self.get_observation(distance)
+            self.get_memory = self.get_memory_postprune
+            return self.get_memory(distance)
 
-    def get_observation_postprune(self, distance):
+    def get_memory_postprune(self, distance):
         bin_heap = []
         target_bin = Memory.get_bin(distance)
         self.logger.debug(f'distance {distance} target_bin {target_bin} bins {len(self.memory_bins)}')
@@ -59,8 +60,12 @@ class Memory:
     
     def tick(self):
         self.current_time += 1
+        self.logger.info(f'ticked {self.current_time}')
     
     def prune(self):
+        self.logger.info(f'pruning {len(self.memory)}')
+        ages = [memory[0].age for memory in self.memory]
+        self.logger.info(f'ages ({self.current_time}) [{ages}]')
         # Create a heap for each bin
         if len(self.memory) < 1:
             return
@@ -69,34 +74,44 @@ class Memory:
         # then the ceil log of that value is taken
         max_age = Memory.get_bin(self.current_time - self.memory[0][1])
         bin_count = 1 if max_age <= 0 else math.ceil(math.log2(max_age))
+        self.logger.info(f'max_age {max_age}\nbin_count {bin_count}')
+
         bin_heaps = [[] for _ in range(bin_count)]
         self.logger.debug(f'prune: creating bins {bin_count}')
 
+        # rebase the memories and reset current_time
+        for memory in self.memory:
+            memory[0].age += self.current_time
+        self.current_time = 0
+        ages = [memory[0].age for memory in self.memory]
+        self.logger.info(f'ages ({self.current_time}) [{ages}]')
+
         # Assign each observation to a bin
         for i, (observation, time_added, rank) in enumerate(self.memory):
-            observation_age = (self.current_time - time_added)
-            bin = Memory.get_bin(observation_age)
+            bin = Memory.get_bin(observation.age)
             while bin >= len(bin_heaps):
                 bin_heaps.append([])
             if len(bin_heaps[bin]) < self.depth:
-                heapq.heappush(bin_heaps[bin], (observation.rank.rank, i, observation))
+                heapq.heappush(bin_heaps[bin], (observation.rank.rank, observation.age, i, observation))
             else:
-                heapq.heappushpop(bin_heaps[bin], (observation.rank.rank, i, observation))
-        
+                heapq.heappushpop(bin_heaps[bin], (observation.rank.rank, observation.age, i, observation))
         # reframe the heaps in terms of the memories so they're all the same when matching
         bin_heaps = [sorted([(observation, observation.age, rank) 
-                      for rank, _, observation in bin_heap], key=lambda key:key[1])
+                      for rank, age, pos, observation in bin_heap], key=lambda key:key[1])
                       for bin_heap in bin_heaps]
-
+        self.logger.info(f'new heaps {len(bin_heaps)}')
         # Replace our memory with the top n elements of each bin
-        self.memory = [(observation, age, rank) 
-                       for bin_heap in bin_heaps for observation, age, rank in bin_heap]
+        self.memory = [(observation, observation.age, observation.rank.rank) 
+                       for bin_heap in bin_heaps 
+                       for observation, age, rank in bin_heap]
+        self.logger.info(f'memories {len(self.memory)}')
+        
         self.memory_bins = bin_heaps
-        self.logger.debug(f'{len(self.memory)}')
-        self.logger.debug(f'{len(self.memory[-1])}')
+        self.logger.info(f'{len(self.memory)}')
+        self.logger.info(f'{len(self.memory[-1])}')
         self.newest_memory_time = self.memory[-1][1]
         self.oldest_memory_time = self.memory[0][1]
-        self.logger.debug(f'oldest & newest {self.oldest_memory_time} & {self.newest_memory_time}')
+        self.logger.info(f'oldest & newest {self.oldest_memory_time} & {self.newest_memory_time}')
 
     
     def get_bins(self, distance):
@@ -116,7 +131,7 @@ class Memory:
     @classmethod
     def get_bin(cls, age):
         # Calculate which bin the age should go in
-        if age == 0:
+        if age <= 0:
             return 0
         return int(math.log2(age))
     
@@ -124,13 +139,13 @@ class Memory:
     
 class Observation:
     def __init__(self, o, age = 0):
+        
         self.observation = self.cleanObservation(o)
         self.age = age
         self.rank = ObservationRank()
 
     def cleanObservation(self, o, nan_substitute=float('inf')):
-        floats = np.frombuffer(o, dtype=np.float32)
-        floats = np.nan_to_num(floats, nan=nan_substitute)
+        floats = np.nan_to_num(o, nan=nan_substitute)
         # this is where the observation might be sized propertly.. 
         # but can be handed by the user of memory so it's not fixed
         return floats

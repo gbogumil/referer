@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Model Stats</title>
+</head>
+<body>
+    <h1>Model Stats</h1>
+    <div id="stats"></div>
+
+    <script>
+        // Fetch stats from the server
+        fetch('http://localhost:5000/get_stats')
+            .then(response => response.json())
+            .then(data => {
+                // Update the page with the new stats
+                let statsDiv = document.getElementById('stats');
+                for (let stat in data) {
+                    statsDiv.innerHTML += `<p>${stat}: ${data[stat]}</p>`;
+                }
+            });
+    </script>
+</body>
+</html>

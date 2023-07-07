@@ -36,7 +36,6 @@ class Memory:
             return self.get_memory(distance)
 
     def get_memory_postprune(self, distance):
-        bin_heap = []
         target_bin = Memory.get_bin(distance)
         self.logger.debug(f'distance {distance} target_bin {target_bin} bins {len(self.memory_bins)}')
         self.logger.debug(f'cur time {self.current_time} memory 0 age {self.memory[0][0].age}')

@@ -21,8 +21,9 @@ from sklearn.metrics import mean_squared_error
 class GapGroup:
     logger = logging.getLogger('gaplogger')
     # the set of peers and learners
-    def __init__(self, distance = 1):
+    def __init__(self, distance = 1, width=10):
         self.peers = []
+        self.width = width
         self.memories = Memory(5)
         # create a peer set with initial distance specified
         self.peers.append(GapPeers(self, distance))
@@ -49,59 +50,36 @@ class GapGroup:
         # update the memory observation ranks during each storage
         GapGroup.logger.info(f'training: memory count {len(self.memories.memory)}')
         # get a list of distances between each memory
-        ages = [o[0].age for o in GapGroup.memories.memory]
+        ages = [o[0].age for o in self.memories.memory]
         GapGroup.logger.info(f'ages {ages}')
 
-        learnerdistances = list(set([learner.distance 
-                            for peer in self.peers 
-                            for learner in peer.learners]))
+        learnerdistances = list(set([peer.distance 
+                            for peer in self.peers]))
         GapGroup.logger.info(f'learner distances {learnerdistances}')
         # get the set of data that might be useful
-        observationdistances = [(o1[0].age - o2[0].age, o1, o2) 
+        observationdistances = [(o1[0].age - o2[0].age, o1[0], o2[0]) 
                                 for o1 in self.memories.memory 
                                 for o2 in self.memories.memory
                                 if o1[0].age - o2[0].age in learnerdistances]
         GapGroup.logger.info(f'distance matches {len(observationdistances)}')
-        distances = [d for (d, o1, o2) in observationdistances]
+        distances = list(set([d for (d, o1, o2) in observationdistances]))
         GapGroup.logger.info(f'{distances}')
         # evaluate each memory pair as a training set for each model
         GapGroup.logger.info(f'peers {len(self.peers)}')
         for peer in self.peers:
             GapGroup.logger.info(f'fitting peer group {peer.distance}')
-            observations = np.array([(o1[0].observation, o2[0].observation) for _, o1, o2 in peer.distance])
-            GapGroup.logger.info(f'\nobs {observations}')
-            o1, o2 = map(np.array, zip(*observations))
+            training_data = []
+            labels = []
+            for _, o1, o2 in observationdistances:
+                zeros = np.zeros_like(o1.observation)
+                training_data.append(np.concatenate((o1.observation, zeros)))
+                labels.append(o1.observation)
+            training_data = np.array(training_data)
+            labels = np.array(labels)
+            GapGroup.logger.info(f'\nobs {training_data}')
             for learner in peer.learners:
                 early_stopping = EarlyStopping(monitor='val_loss', patience=3)
-                learner.model.fit(o1, o2, validation_split=0.2, epochs=1500, batch_size=8*peer.distance, callbacks=[early_stopping])
-
-    def stats(self):
-        # starts with a set of peers, recursively calls each peer
-        statinfo = self._stats_internal()
-        GapGroup.logger.info(f'stats: {statinfo}')
-        return json.dumps(statinfo, indent=2)
-
-    def _stats_internal(self):
-        return {
-            'peers count': len(self.peers),
-            'observation_size': self.observation_size,
-            'memory size': len(self.memories),
-            'peerStats': [
-                {
-                    'distance': peer.distance,
-                    'numLearners': len(peer.learners),
-                    'childDistance': -1 if not peer.child else peer.child.peers.distance,
-                    'learnerStats': [
-                        {
-                            'rank': learner.rank,
-                            'confidence': learner.confidence_amount
-                        }
-                        for learner in peer.learners
-                    ]
-                }
-                for peer in self.peers
-            ]
-        }
+                learner.model.fit(training_data, labels, validation_split=0.2, epochs=1500, batch_size=8*peer.distance, callbacks=[early_stopping])
 
     def grow(self):
         # build out the network where it needs support
@@ -116,8 +94,65 @@ class GapGroup:
                     self.peers.append(result[1])
                 if learner.confidence_amount < learner.low_limit:
                     learner.grow_wider()
+
     def prune(self):
-        pass
+        self.memories.prune()
+
+    def stats(self):
+        # starts with a set of peers, recursively calls each peer
+        statinfo = self._stats_internal()
+        GapGroup.logger.info(f'stats: {statinfo}')
+        return json.dumps(statinfo, indent=2)
+
+    def _stats_internal(self):
+        return {
+            'peerLen': len(self.peers),
+            'memoryLen': len(self.memories),
+            'peerStats': [
+                self._stats_peer(peer)
+                for peer in self.peers],
+            'memoryStats': self._stats_memory(self.memories)
+        }
+    
+    def _stats_memory(self, memory):
+        return {
+            'depth': memory.depth,
+            'current_time': memory.current_time,
+            'memorylen': len(memory.memory),
+            'binlen': len(memory.memory_bins),
+            'bininfo': [
+                {
+                    'binpos': i,
+                    'binlen': len(bin),
+                    'binObservations': [
+                        {
+                            # 'observation': o[0].observation,
+                            'age': o[0].age,
+                            'rank': o[0].rank.rank
+                        } for o in bin
+                    ]
+                } for i, bin in enumerate(memory.memory_bins)
+            ]
+    }
+    
+    
+    def _stats_peer(self, peer):
+        if not peer:
+            return None
+        return {
+            'distance': peer.distance,
+            'numLearners': len(peer.learners),
+            'learnerStats': [
+                self._stats_learner(learner) for learner in peer.learners
+            ]
+        }
+            
+    def _stats_learner(self, learner):
+        return {
+            'rank': learner.rank,
+            'confidence': learner.confidence_amount,
+            'learnerChildPeers': self._stats_peer(learner.childPeers)
+        }
 
 class GapPeers:
     # the set of peers in a given distance level
@@ -126,31 +161,37 @@ class GapPeers:
         self.distance = distance
         self.learners = []
         if learner == None:
-            learner = GapLearner(self)
+            learner = GapLearner(self, observation_size=self.group.width)
         self.learners.append(learner)
 
     def predict(self, observation, parentPrediction = None):
         GapGroup.logger.debug(f'peer predict {observation} {parentPrediction}')
         # if there is no parent observation then try getting one
         past_memory = self.group.memories.get_memory(self.distance)
-        # update the observation ranking based on similarity and time
-        accuracies = [(learner, learner.evaluate(observation, past_memory[0], parentPrediction)) 
-                      for learner in self.learners]
+        if past_memory == None:
+            # we can't evaluate, so just sort on rank and evaluate the max
+            GapGroup.logger.debug(f'no memories - {len(self.learners)}')
+            best_peer = max(self.learners, key=lambda l: l.rank)
+            best_prediction = best_peer._predict_internal(observation, parentPrediction)
+        else:
+            # update the observation ranking based on similarity and time
+            accuracies = [(learner, learner.evaluate(observation, past_memory[0], parentPrediction)) 
+                        for learner in self.learners]
 
-        o1age = self.group.memories.get_age(observation)
-        o2age = self.group.memories.get_age(past_memory[0])
-        GapGroup.logger.debug(f'age 1 & 2 {o1age} & {o2age}')
-        bin = Memory.get_bin(o2age - o1age)
-        GapGroup.logger.debug(f'bin {bin}')
+            o1age = self.group.memories.get_age(observation)
+            o2age = self.group.memories.get_age(past_memory[0])
+            GapGroup.logger.debug(f'age 1 & 2 {o1age} & {o2age}')
+            bin = Memory.get_bin(o2age - o1age)
+            GapGroup.logger.debug(f'bin {bin}')
 
-        for accuracy in accuracies:
-            past_memory[0].rank.add_rank(bin, accuracy[1][0])
+            for accuracy in accuracies:
+                past_memory[0].rank.add_rank(bin, accuracy[1][0])
 
-        best_peer, (best_accuracy, best_prediction) = max(accuracies, key=lambda item: item[1][0])
+            best_peer, (_, best_prediction) = max(accuracies, key=lambda item: item[1][0])
 
-        GapGroup.logger.debug(f'best peer child {best_peer.child}')
-        if best_peer.child:
-            return best_peer.child.peers.predict(observation, parentPrediction = best_prediction)
+        GapGroup.logger.debug(f'best peer child {best_peer.childPeers}')
+        if best_peer.childPeers:
+            return best_peer.childPeers.predict(observation, parentPrediction = best_prediction)
         else:
             return best_peer._predict_internal(observation, parentPrediction)
     
@@ -230,7 +271,7 @@ class GapLearner:
         modelinputshape = self.model.layers[0].input_shape[1]
         GapGroup.logger.debug(f'model input layer shape: {modelinputshape}')
         if parentPrediction == None:
-            parentPrediction = [[] for _ in range(len(observation.observation))]
+            parentPrediction = [0.0 for _ in range(len(observation.observation))]
         input = np.concatenate((observation.observation, parentPrediction))
         input = np.expand_dims(input, axis=0)
         GapGroup.logger.debug(f'evaluate shape: {input.shape}')
@@ -245,9 +286,8 @@ class GapLearner:
         # see how far off the predictor would be from the previous state
         rank = mean_squared_error(np.squeeze(observation.observation), prediction)
         GapGroup.logger.debug(f'adding rank {rank} {observation.rank}')
-        pastObservation.rank.add_rank(
-            self.memories.get_bin(self.memories.get_age(observation)), 
-            rank)
+        memories = self.peers.group.memories
+        pastObservation.rank.add_rank(memories.get_bin(memories.get_age(observation)), rank)
         GapGroup.logger.debug(f'obs rank {observation.rank}')
         self.rank = rank
         GapGroup.logger.info(f'adusting confidence_amount {self.confidence_amount}')

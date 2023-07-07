@@ -11,7 +11,7 @@ def printbytearray(bytes):
     return [b for b in bytes]
 
 def observation_generator():
-    observation_qty = 100
+    observation_qty = 1000
     observation_length = 10
     frame_size = 8
     # random sequence
@@ -24,22 +24,6 @@ def observation_generator():
 
     for i in range(observation_qty):
         yield Memory.Observation(framesequence[i % frame_size])
-
-def infer(self, data):
-    self.statcounter -= 1
-    if self.statcounter <= 0:
-        self.statcounter = self.statcountreset
-        _ = self.stats()
-    # Here, data is now a list of float values
-    self.logger.info(f'gapserver infer ({self.statcounter}): {data}')
-    inference = self.learner.predict(data, None, True)
-    self.logger.info(f'gapserver infer ret: {inference}')
-    if inference is None:
-        inference = data
-    else: 
-        inference = inference.tobytes()
-    return inference
-
 
 app = Flask(__name__)
 

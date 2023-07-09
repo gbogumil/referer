@@ -38,7 +38,7 @@ class GapGroup:
             GapGroup.logger.error(f"Invalid observation type: {type(observation)}")
             return None
 
-        self.memories.add_observation(observation, 0)
+        self.memories.add_observation(observation)
         self.memories.tick()
 
         # check for old memories so n be followed
@@ -50,17 +50,17 @@ class GapGroup:
         # update the memory observation ranks during each storage
         GapGroup.logger.info(f'training: memory count {len(self.memories.memory)}')
         # get a list of distances between each memory
-        ages = [o[0].age for o in self.memories.memory]
-        GapGroup.logger.info(f'ages {ages}')
+        births = [o.birth for o in self.memories.memory]
+        GapGroup.logger.info(f'births {births}')
 
         learnerdistances = list(set([peer.distance 
                             for peer in self.peers]))
         GapGroup.logger.info(f'learner distances {learnerdistances}')
         # get the set of data that might be useful
-        observationdistances = [(o1[0].age - o2[0].age, o1[0], o2[0]) 
+        observationdistances = [(o1.birth - o2.birth, o1, o2) 
                                 for o1 in self.memories.memory 
                                 for o2 in self.memories.memory
-                                if o1[0].age - o2[0].age in learnerdistances]
+                                if o1.birth - o2.birth in learnerdistances]
         GapGroup.logger.info(f'distance matches {len(observationdistances)}')
         distances = list(set([d for (d, o1, o2) in observationdistances]))
         GapGroup.logger.info(f'{distances}')
@@ -81,19 +81,72 @@ class GapGroup:
                 early_stopping = EarlyStopping(monitor='val_loss', patience=3)
                 learner.model.fit(training_data, labels, validation_split=0.2, epochs=1500, batch_size=8*peer.distance, callbacks=[early_stopping])
 
-    def grow(self):
-        # build out the network where it needs support
-        # and grow it where it is doing well
-        for peer in self.peers:
+    def evolve(self):
+        # all this means is to examine the current structure and adjust
+        # loop through each learner in the each peer group
+        # if confidence is low then
+        # if there is not a child add a child
+        # if there is a child add a peer
+        # if confidence is high then
+        # if there is already a parent then increase the parent confidence
+        # else add a parent
+        sortedpeers = sorted(self.peers, key=lambda peer:peer.distance)
+        for peer in sortedpeers:
+            newchildren = []
+            newparents = []
+            newlearners = []
             for learner in peer.learners:
-                GapGroup.logger.debug(f'learner confidence {learner.confidence_amount}')
-                if learner.confidence_amount > learner.high_limit:
-                    result = learner.grow_deeper()
-                    if not result[0]:
-                        result = learner.grow_taller()
-                    self.peers.append(result[1])
-                if learner.confidence_amount < learner.low_limit:
-                    learner.grow_wider()
+                newpeer = None
+                newpeerlearner = None
+                newparent = None
+                if self.shouldaddpeerlearner(learner):
+                    newpeerlearner = self.create_peerlearner(learner)
+                if self.shouldaddchild(learner):
+                    newpeer = self.create_peer(peer.distance/2)
+                if self.shouldaddparent(learner):
+                    newparent = self.create_peer(peer.distance*2)
+                if self.shouldadjustconfidence(learner):
+                    self.adjustconfidence(learner)
+                if newpeerlearner:
+                    peer.learners.append(newpeerlearner)
+                    newlearners.append(newpeerlearner)
+                if newpeer:
+                    learner.childPeers = newpeer
+                    self.peers.append(newpeer)
+                    newchildren.append(newpeer)
+                if newparent:
+                    self.peers.append(newparent)
+                    newparents.append(newparent)
+
+    def shouldaddchild(self, learner):
+        return (learner.peers.distance > 1 and
+                learner.confidence_amount < learner.low_limit and
+                learner.childPeers is None)
+    
+    def create_peer(self, distance):
+        return GapPeers(self, distance)
+    
+    def create_parent(self, learner):
+        peer = self.create_peer(learner)
+    
+    def shouldaddpeerlearner(self, learner):
+        return (learner.confidence_amount < learner.low_limit and
+                learner.childPeers is not None)
+    
+    def create_peerlearner(self, learner):
+        learner = GapLearner(learner.peers)
+        return learner
+    
+    def shouldaddparent(self, learner):
+        return learner.confidence_amount > learner.high_limit
+    
+    def shouldadjustconfidence(self, learner):
+        return (self.shouldaddchild(learner) or
+                self.shouldaddchild(learner) or
+                self.shouldaddpeerlearner(learner))
+
+    def adjustconfidence(self, learner):
+        learner.confidence_amount = (learner.low_limit + learner.high_limit) / 2
 
     def prune(self):
         self.memories.prune()
@@ -102,12 +155,11 @@ class GapGroup:
         # starts with a set of peers, recursively calls each peer
         statinfo = self._stats_internal()
         GapGroup.logger.info(f'stats: {statinfo}')
-        return json.dumps(statinfo, indent=2)
+        return statinfo
 
     def _stats_internal(self):
         return {
             'peerLen': len(self.peers),
-            'memoryLen': len(self.memories),
             'peerStats': [
                 self._stats_peer(peer)
                 for peer in self.peers],
@@ -119,6 +171,13 @@ class GapGroup:
             'depth': memory.depth,
             'current_time': memory.current_time,
             'memorylen': len(memory.memory),
+            'memoryinfo': [
+                {
+                    'memorypos': i,
+                    'birth': m.birth,
+                    'rank': m.rank.rank
+                } for i, m in enumerate(memory.memory)
+            ],
             'binlen': len(memory.memory_bins),
             'bininfo': [
                 {
@@ -126,9 +185,9 @@ class GapGroup:
                     'binlen': len(bin),
                     'binObservations': [
                         {
-                            # 'observation': o[0].observation,
-                            'age': o[0].age,
-                            'rank': o[0].rank.rank
+                            # 'observation': o.observation,
+                            'birth': o.birth,
+                            'rank': o.rank.rank
                         } for o in bin
                     ]
                 } for i, bin in enumerate(memory.memory_bins)
@@ -164,9 +223,8 @@ class GapPeers:
             learner = GapLearner(self, observation_size=self.group.width)
         self.learners.append(learner)
 
-    def predict(self, observation, parentPrediction = None):
+     def predict(self, observation, parentPrediction = None):
         GapGroup.logger.debug(f'peer predict {observation} {parentPrediction}')
-        # if there is no parent observation then try getting one
         past_memory = self.group.memories.get_memory(self.distance)
         if past_memory == None:
             # we can't evaluate, so just sort on rank and evaluate the max
@@ -175,19 +233,19 @@ class GapPeers:
             best_prediction = best_peer._predict_internal(observation, parentPrediction)
         else:
             # update the observation ranking based on similarity and time
-            accuracies = [(learner, learner.evaluate(observation, past_memory[0], parentPrediction)) 
+            accuracies = [(learner, learner.evaluate(observation, past_memory, parentPrediction)) 
                         for learner in self.learners]
 
-            o1age = self.group.memories.get_age(observation)
-            o2age = self.group.memories.get_age(past_memory[0])
+            o1age = self.group.memories.get_age(observation.birth)
+            o2age = self.group.memories.get_age(past_memory.birth)
             GapGroup.logger.debug(f'age 1 & 2 {o1age} & {o2age}')
             bin = Memory.get_bin(o2age - o1age)
             GapGroup.logger.debug(f'bin {bin}')
 
             for accuracy in accuracies:
-                past_memory[0].rank.add_rank(bin, accuracy[1][0])
+                past_memory.rank.add_rank(bin, accuracy[1][0])
 
-            best_peer, (_, best_prediction) = max(accuracies, key=lambda item: item[1][0])
+            best_peer, (_, best_prediction) = max(accuracies, key=lambda accuracy: accuracy[1][0])
 
         GapGroup.logger.debug(f'best peer child {best_peer.childPeers}')
         if best_peer.childPeers:
@@ -216,11 +274,11 @@ class GapLearner:
     
     def __init__(self, peers, model=None, observation_size=10):
         GapGroup.logger = logging.getLogger('gaplogger')
+        self.rank = 0
         self.peers = peers
+        self.observation_size = observation_size
         self.model = model if model is not None else self.create_model(
             input_size=observation_size*2, output_size=observation_size)
-        self.rank = 0
-        self.observation_size = observation_size
         # GapPeers reference smaller distance peers
         self.childPeers = None
         # the amount of confidence for this learner
@@ -287,7 +345,7 @@ class GapLearner:
         rank = mean_squared_error(np.squeeze(observation.observation), prediction)
         GapGroup.logger.debug(f'adding rank {rank} {observation.rank}')
         memories = self.peers.group.memories
-        pastObservation.rank.add_rank(memories.get_bin(memories.get_age(observation)), rank)
+        pastObservation.rank.add_rank(memories.get_bin(memories.get_age(observation.birth)), rank)
         GapGroup.logger.debug(f'obs rank {observation.rank}')
         self.rank = rank
         GapGroup.logger.info(f'adusting confidence_amount {self.confidence_amount}')

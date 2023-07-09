@@ -3,10 +3,12 @@ import random
 import logging
 import Memory
 import numpy as np
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template
 import threading
 import time
 import json
+import os
+import glob
 
 def printbytearray(bytes):
     return [b for b in bytes]
@@ -23,21 +25,67 @@ def observation_generator(observation_qty, observation_length, frame_size):
     for i in range(observation_qty):
         yield Memory.Observation(framesequence[i % frame_size], i)
 
+def loadJsonLog(name, instance):
+    try:
+        with open(f'{name} {instance}.json', 'r') as f:
+            return json.load(f)
+    except:
+        return None
+
+
+
 app = Flask(__name__)
+# app.config['DEBUG'] = True
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    print('FLASK: rendering index')
+    ret = render_template('index.html')
+    print('FLASK: rendered index')
+    return ret
 
-@app.route('/get_status', methods=['GET'])
+@app.route('/get_stats', methods=['GET'])
 def get_stats():
+    print('FLASK: getting stats')
     stats = group.stats()
+    print('FLASK: got stats')
     return jsonify(stats)
 
+@app.route('/infer', methods=['GET'])
+def get_infer():
+    print('FLASK: infer')
+
+names = ['stats before prune', 'stats after prune', 'stats after training', 'stats after evolve']
+
+def deleteevolutionstats():
+    patterns = [f'{name} *.json' for name in names]
+    for pattern in patterns:
+        files = glob.glob(pattern)
+        for file in files:
+            os.remove(file)
+
+@app.route('/get_evolutionstats', methods=['GET'])
+def get_evolutionstats():
+    # loop through the local folder for stats before / after json files
+    print('FLASK: getting evolution stats')
+    
+    ret = []
+    instance = 0
+    while instance < 20:
+        instance += 1
+        print(f'appending instance {instance}')
+        instancedata = {name: loadJsonLog(name, instance) for name in names}
+        if all(instancedata[name] is None for name in names):
+            break
+        ret.append(instancedata)
+    print('FLASK: got evolution stats')
+    return {f'instance {i}': data for i, data in enumerate(ret)}
+
 def run_flask_app():
+    host = 'localhost'
     port = 5000
-    app.run(port)
-    logger.info(f'flask server running on port {port}')
+    app.run(host=host, port=port)
+    logger.info(f'FLASK: flask server running on {host}:{port}')
 
 def dump(name, data):
     stringdata = json.dumps(data, indent=2)
@@ -75,6 +123,8 @@ if __name__ == '__main__':
     # Now you can log to both the file and the console via the logger
     logger.info('gaplogger configured')
 
+    deleteevolutionstats()
+
     t = threading.Thread(target=run_flask_app)
     t.daemon = True
     t.start()
@@ -85,11 +135,11 @@ if __name__ == '__main__':
     
     
     # sample data params
-    observation_qty = 300
+    observation_qty = 3000
     observation_length = 10
-    frame_size = 8
+    frame_size = 15
     # learning input params
-    training_counter = 15
+    training_counter = 100
     training_counter_reset = training_counter
     delay = 0.001
     training_count = 0

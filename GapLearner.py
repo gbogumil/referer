@@ -31,11 +31,11 @@ class GapGroup:
     def predict(self, observation, parentPrediction = None):
         # make sure the observation is usable
         if isinstance(observation, bytearray):
-            GapGroup.logger.info(f'predicting obs len {len(observation)}')
+            GapGroup.logger.debug(f'predicting obs len {len(observation)}')
             observation = Observation(observation, self.memories.current_time)
-            GapGroup.logger.info(f'created observation {len(observation.observation)}')
+            GapGroup.logger.debug(f'created observation {len(observation.observation)}')
         elif not isinstance(observation, Observation):
-            GapGroup.logger.error(f"Invalid observation type: {type(observation)}")
+            GapGroup.logger.debug(f"Invalid observation type: {type(observation)}")
             return None
 
         self.memories.add_observation(observation)
@@ -78,8 +78,9 @@ class GapGroup:
             labels = np.array(labels)
             GapGroup.logger.info(f'\nobs {training_data}')
             for learner in peer.learners:
+                GapGroup.logger.info('fitting peer learner')
                 early_stopping = EarlyStopping(monitor='val_loss', patience=3)
-                learner.model.fit(training_data, labels, validation_split=0.2, epochs=1500, batch_size=8*peer.distance, callbacks=[early_stopping])
+                learner.model.fit(training_data, labels, validation_split=0.2, epochs=100, batch_size=8*peer.distance, callbacks=[early_stopping])
 
     def evolve(self):
         # all this means is to examine the current structure and adjust
@@ -105,6 +106,7 @@ class GapGroup:
                     newpeer = self.create_peer(peer.distance/2)
                 if self.shouldaddparent(learner):
                     newparent = self.create_peer(peer.distance*2)
+                    newparent.learners[0].childpeers = peer
                 if self.shouldadjustconfidence(learner):
                     self.adjustconfidence(learner)
                 if newpeerlearner:
@@ -160,40 +162,33 @@ class GapGroup:
     def _stats_internal(self):
         return {
             'peerLen': len(self.peers),
-            'peerStats': [
-                self._stats_peer(peer)
-                for peer in self.peers],
-            'memoryStats': self._stats_memory(self.memories)
+            **{f'peerStats {i}':self._stats_peer(peer) for i, peer in enumerate(self.peers)},
+            **self._stats_memory(self.memories)
         }
     
     def _stats_memory(self, memory):
         return {
-            'depth': memory.depth,
             'current_time': memory.current_time,
+            'depth': memory.depth,
             'memorylen': len(memory.memory),
-            'memoryinfo': [
-                {
-                    'memorypos': i,
-                    'birth': m.birth,
-                    'rank': m.rank.rank
-                } for i, m in enumerate(memory.memory)
-            ],
             'binlen': len(memory.memory_bins),
-            'bininfo': [
-                {
-                    'binpos': i,
-                    'binlen': len(bin),
-                    'binObservations': [
+            'memoryinfo': {f'memory {i}':
+                           {
+                                'birth': m.birth,
+                                'rank': m.rank.rank
+                            } for i, m in enumerate(memory.memory)},
+            'bininfo': {f'bin {i}':
                         {
-                            # 'observation': o.observation,
-                            'birth': o.birth,
-                            'rank': o.rank.rank
-                        } for o in bin
-                    ]
-                } for i, bin in enumerate(memory.memory_bins)
-            ]
-    }
-    
+                            'binlen': len(bin),
+                            'binObservations': {f'bin {i}':
+                                {
+                                    # 'observation': o.observation,
+                                    'birth': o.birth,
+                                    'rank': o.rank.rank
+                                } for i, o in enumerate(bin)
+                            }
+                        } for i, bin in enumerate(memory.memory_bins)}
+        }
     
     def _stats_peer(self, peer):
         if not peer:
@@ -201,9 +196,9 @@ class GapGroup:
         return {
             'distance': peer.distance,
             'numLearners': len(peer.learners),
-            'learnerStats': [
-                self._stats_learner(learner) for learner in peer.learners
-            ]
+            'learnerStats': {f'learner {i}':
+                self._stats_learner(learner) for i, learner in enumerate(peer.learners)
+            }
         }
             
     def _stats_learner(self, learner):
@@ -223,7 +218,7 @@ class GapPeers:
             learner = GapLearner(self, observation_size=self.group.width)
         self.learners.append(learner)
 
-     def predict(self, observation, parentPrediction = None):
+    def predict(self, observation, parentPrediction = None):
         GapGroup.logger.debug(f'peer predict {observation} {parentPrediction}')
         past_memory = self.group.memories.get_memory(self.distance)
         if past_memory == None:

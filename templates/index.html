@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<head>
+    <title>Model Stats</title>
+    <script src="{{ url_for('static', filename='js/jsonview.js') }}"></script>
+    <style>
+        #container {
+        display: flex; /* This will put the child divs side by side */
+        justify-content: space-between; /* This will put a little space between the columns */
+        }
+
+        #realtimeStats, #evolutionStats {
+        flex-basis: 48%; /* This will make each div take up roughly half the width of the container (allowing for a small gap) */
+        box-sizing: border-box; /* This ensures padding and border are included in the element's total width and height */
+        }
+    </style>
+    <script>
+        function toggleRealtimeFetch(e) {
+            if (e.target.checked) {
+                realtimeInterval = setInterval(updaterealtimeStats, 1000); // 1 second interval
+            } else {
+                clearInterval(realtimeInterval);
+            }
+        }
+    
+        // function to control auto-fetch for evolutionStats
+        function toggleEvolutionFetch(e) {
+            if (e.target.checked) {
+                evolutionInterval = setInterval(updateevolutionStats, 10000); // 10 seconds interval
+            } else {
+                clearInterval(evolutionInterval);
+            }
+        }
+    
+        // Fetch stats from the server
+        function updaterealtimeStats() {
+            console.log('fetching stats')
+            fetch('http://localhost:5000/get_stats')
+            .then(response => response.json())
+            .then(data => {
+                // Update the page with the new stats
+                updateVisualization('realtimeStats', data);
+            });
+        }
+    
+        function updateevolutionStats() {
+            // read each of the stats files in the local director
+            // keep an array of d3 nodes for each iteration of
+            // [before prune, after prune, after train, after evolve]
+            console.log('fetching evolution stats')
+            fetch('http://localhost:5000/get_evolutionstats')
+            .then(response => response.json())
+            .then(data => {
+                // Update the page with the new stats
+                updateVisualization('evolutionStats', data);
+            });
+        }
+    
+        function updateVisualization(name, data) {
+            console.log(`updating visualization ${name}`);
+            div = document.getElementById(name);
+    
+            const tree = jsonview.create(data);
+            div.innerHTML = "";
+            jsonview.render(tree, div);
+            jsonview.expand(tree);
+            console.log(`updated visualization ${name}`);
+        }
+    
+        let realtimeInterval;
+        let evolutionInterval;
+
+        // start auto-fetching when the page loads
+        window.addEventListener("load", () => {
+            // fetch data immediately when button is clicked
+            document.getElementById("realtimeFetchBtn").addEventListener("click", updaterealtimeStats);
+            document.getElementById("evolutionFetchBtn").addEventListener("click", updateevolutionStats);
+        
+            // enable or disable auto-fetch when checkbox is toggled
+            document.getElementById("realtimeToggle").addEventListener("change", toggleRealtimeFetch);
+            document.getElementById("evolutionToggle").addEventListener("change", toggleEvolutionFetch);
+
+            document.getElementById("realtimeToggle").checked = true;
+            document.getElementById("evolutionToggle").checked = true;
+
+            toggleRealtimeFetch({target: document.getElementById("realtimeToggle")});
+            toggleEvolutionFetch({target: document.getElementById("evolutionToggle")});
+        });
+    </script>
+</head>
+<body>
+    <button id="realtimeFetchBtn">Fetch RealtimeStats Now</button>
+    <input type="checkbox" id="realtimeToggle" checked> Enable RealtimeStats Auto-fetch<br>
+
+    <button id="evolutionFetchBtn">Fetch EvolutionStats Now</button>
+    <input type="checkbox" id="evolutionToggle" checked> Enable EvolutionStats Auto-fetch
+
+    <div id="container">
+        <div id="evolutionStats"></div>
+        <div id="realtimeStats"></div>
+    </div>
+</body>
+</html>

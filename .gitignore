@@ -4,3 +4,5 @@ Lib/
 Scripts/
 gapserver/
 gapserver.log
+stats after*.json
+stats before*.json

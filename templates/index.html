@@ -35,11 +35,18 @@
         // Fetch stats from the server
         function updaterealtimeStats() {
             console.log('fetching stats')
-            fetch('http://localhost:5000/get_stats')
+            fetch('/get_stats')
             .then(response => response.json())
             .then(data => {
                 // Update the page with the new stats
                 updateVisualization('realtimeStats', data);
+            })
+            .then(data => {
+                fetch('/get_latestinference')
+                .then(response => response.json())
+                .then(data => {
+                    updateVisualization('inference', data);
+                })
             });
         }
     
@@ -48,10 +55,11 @@
             // keep an array of d3 nodes for each iteration of
             // [before prune, after prune, after train, after evolve]
             console.log('fetching evolution stats')
-            fetch('http://localhost:5000/get_evolutionstats')
+            fetch('/get_evolutionstats')
             .then(response => response.json())
             .then(data => {
                 // Update the page with the new stats
+                
                 updateVisualization('evolutionStats', data);
             });
         }
@@ -95,6 +103,7 @@
     <button id="evolutionFetchBtn">Fetch EvolutionStats Now</button>
     <input type="checkbox" id="evolutionToggle" checked> Enable EvolutionStats Auto-fetch
 
+    <div id="inference"></div>
     <div id="container">
         <div id="evolutionStats"></div>
         <div id="realtimeStats"></div>

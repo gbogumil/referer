@@ -27,8 +27,17 @@ class GapGroup:
         self.memories = Memory(5)
         # create a peer set with initial distance specified
         self.peers.append(GapPeers(self, distance))
+        self.predicting = False
 
     def predict(self, observation, parentPrediction = None):
+        if self.predicting:
+            return None
+        self.predicting = True
+        ret = self._predict_internal(observation, parentPrediction)
+        self.predicting = False
+        return ret
+    
+    def _predict_internal(self, observation, parentPrediction):
         # make sure the observation is usable
         if isinstance(observation, bytearray):
             GapGroup.logger.debug(f'predicting obs len {len(observation)}')
@@ -92,6 +101,7 @@ class GapGroup:
         # if there is already a parent then increase the parent confidence
         # else add a parent
         sortedpeers = sorted(self.peers, key=lambda peer:peer.distance)
+        eli = lambda m: GapGroup.logger.info(f"evolve: {m}")
         for peer in sortedpeers:
             newchildren = []
             newparents = []
@@ -100,25 +110,38 @@ class GapGroup:
                 newpeer = None
                 newpeerlearner = None
                 newparent = None
+                # determine what should be added before adding
+                # else adding influenes what should be added
                 if self.shouldaddpeerlearner(learner):
+                    eli(f'should add peer')
                     newpeerlearner = self.create_peerlearner(learner)
                 if self.shouldaddchild(learner):
+                    eli('should add child')
                     newpeer = self.create_peer(peer.distance/2)
                 if self.shouldaddparent(learner):
+                    eli('should add parent')
                     newparent = self.create_peer(peer.distance*2)
                     newparent.learners[0].childpeers = peer
                 if self.shouldadjustconfidence(learner):
+                    eli('should adjust confidence')
                     self.adjustconfidence(learner)
+                # add whatever was determined
                 if newpeerlearner:
+                    eli(f'adding peer learner {self.peers.distance}')
                     peer.learners.append(newpeerlearner)
                     newlearners.append(newpeerlearner)
                 if newpeer:
+                    eli(f'adding child {self.peers.distance} {newpeer.peers.distance}')
                     learner.childPeers = newpeer
                     self.peers.append(newpeer)
                     newchildren.append(newpeer)
                 if newparent:
+                    eli(f'adding parent {newparent.peers.distance}')
                     self.peers.append(newparent)
                     newparents.append(newparent)
+            eli(f'result {len(newchildren)} {len(newparents)} {len(newlearners)} {len(self.peers)}')
+            eli(f'{self.stats()}')
+            
 
     def shouldaddchild(self, learner):
         return (learner.peers.distance > 1 and
@@ -126,10 +149,12 @@ class GapGroup:
                 learner.childPeers is None)
     
     def create_peer(self, distance):
+        GapGroup.logger.info(f"Creating peer {distance}")
         return GapPeers(self, distance)
     
     def create_parent(self, learner):
-        peer = self.create_peer(learner)
+        GapGroup.logger.info(f"Creating parent {self.peers.distance}")
+        peer = self.create_peer(learner, self.peers.distance)
     
     def shouldaddpeerlearner(self, learner):
         return (learner.confidence_amount < learner.low_limit and
@@ -156,7 +181,7 @@ class GapGroup:
     def stats(self):
         # starts with a set of peers, recursively calls each peer
         statinfo = self._stats_internal()
-        GapGroup.logger.info(f'stats: {statinfo}')
+        GapGroup.logger.debug(f'stats: {statinfo}')
         return statinfo
 
     def _stats_internal(self):
@@ -279,13 +304,13 @@ class GapLearner:
         # the amount of confidence for this learner
         self.confidence_amount = 0.5
         # the level of accuracy needed to flip confidence effect
-        self.confidence_factor = 0.4
+        self.confidence_factor = 0.64
         # how fast confidence increases with good predictions
-        self.confidence_increase = 0.2
+        self.confidence_increase = 0.02
         # how fast confidence decreases with bad predictions
-        self.confidence_decrease = 0.1
+        self.confidence_decrease = 0.01
         # the confidence level needed to birth a child and double the current distance
-        self.high_limit = 0.6
+        self.high_limit = 0.7
         # the confidence lower bound to spawn an additional GapLearner of the same distance
         self.low_limit = 0.2
 
@@ -335,7 +360,7 @@ class GapLearner:
     def evaluate(self, observation, pastObservation, parentPrediction = None):
         # models except the root model take input 2x observation size
         
-        prediction = self._predict_internal(pastObservation, None)
+        prediction = self._predict_internal(pastObservation, parentPrediction)
         # see how far off the predictor would be from the previous state
         rank = mean_squared_error(np.squeeze(observation.observation), prediction)
         GapGroup.logger.debug(f'adding rank {rank} {observation.rank}')
@@ -352,6 +377,3 @@ class GapLearner:
         GapGroup.logger.info(f'adjusted confidence_amount by {self.confidence_amount - confidence_hold} from {confidence_hold} to {self.confidence_amount}')
 
         return rank, prediction[0]
-    
-    
-
